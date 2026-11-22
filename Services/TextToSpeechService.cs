@@ -1,21 +1,37 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Speech.AudioFormat;
 using System.Speech.Synthesis;
+using System.Threading.Tasks;
+using Windows.Media.Core;
+using Windows.Media.Playback;
+using Windows.Media.SpeechSynthesis;
 using SpeechApp.Enums;
 using SpeechApp.Models;
 
 namespace SpeechApp.Services
 {
     /// <summary>
-    /// Metinden Sese (Text-to-Speech / TTS) dönüşümünü yöneten,
-    /// ses hızı, ses düzeyi, ses profili ve WAV dışa aktarımını destekleyen servis.
+    /// Metinden Sese (Text-to-Speech / TTS) dönüşümünü yöneten ana servis.
+    /// Hem klasik SAPI 5 seslerini (Zira vb.) hem de modern Windows OneCore seslerini
+    /// (Türkçe Microsoft Tolga vb.) birleşik mimaride destekler.
     /// </summary>
     public class TextToSpeechService : IDisposable
     {
-        private SpeechSynthesizer? _synthesizer;
+        // --- SAPI 5 Motoru ---
+        private System.Speech.Synthesis.SpeechSynthesizer? _sapiSynthesizer;
+
+        // --- OneCore (Modern Windows & Türkçe Tolga) Motoru ---
+        private Windows.Media.SpeechSynthesis.SpeechSynthesizer? _oneCoreSynthesizer;
+        private MediaPlayer? _mediaPlayer;
+
+        private VoiceModel? _selectedVoice;
         private SynthesisStatus _status = SynthesisStatus.Idle;
+        private int _rate = 0; // -10 ile +10
+        private int _volume = 100; // 0 ile 100
         private bool _disposed = false;
 
         public SynthesisStatus Status
@@ -33,266 +49,385 @@ namespace SpeechApp.Services
 
         public int Rate
         {
-            get => _synthesizer?.Rate ?? 0;
+            get => _rate;
             set
             {
-                if (_synthesizer != null)
+                _rate = Math.Clamp(value, -10, 10);
+                if (_sapiSynthesizer != null)
                 {
-                    // Rate aralığı: -10 ile 10
-                    int clamped = Math.Clamp(value, -10, 10);
-                    _synthesizer.Rate = clamped;
+                    _sapiSynthesizer.Rate = _rate;
+                }
+                if (_mediaPlayer != null)
+                {
+                    _mediaPlayer.PlaybackSession.PlaybackRate = RateToPlaybackSpeed(_rate);
                 }
             }
         }
 
         public int Volume
         {
-            get => _synthesizer?.Volume ?? 100;
+            get => _volume;
             set
             {
-                if (_synthesizer != null)
+                _volume = Math.Clamp(value, 0, 100);
+                if (_sapiSynthesizer != null)
                 {
-                    // Volume aralığı: 0 ile 100
-                    int clamped = Math.Clamp(value, 0, 100);
-                    _synthesizer.Volume = clamped;
+                    _sapiSynthesizer.Volume = _volume;
+                }
+                if (_mediaPlayer != null)
+                {
+                    _mediaPlayer.Volume = _volume / 100.0;
                 }
             }
         }
 
+        public VoiceModel? SelectedVoice => _selectedVoice;
+
         public event Action<SynthesisStatus>? OnStatusChanged;
-        public event Action<int, int, string>? OnSpeakProgress; // charPosition, charCount, currentWord
+        public event Action<int, int, string>? OnSpeakProgress; // charPos, charCount, word
         public event Action? OnSpeakCompleted;
         public event Action<string>? OnError;
 
         public TextToSpeechService()
         {
-            InitializeSynthesizer();
+            InitializeSapi();
+            InitializeOneCore();
         }
 
-        private void InitializeSynthesizer()
+        private void InitializeSapi()
         {
             try
             {
-                _synthesizer = new SpeechSynthesizer();
-                _synthesizer.SpeakProgress += Synthesizer_SpeakProgress;
-                _synthesizer.SpeakCompleted += Synthesizer_SpeakCompleted;
-                _synthesizer.StateChanged += Synthesizer_StateChanged;
+                _sapiSynthesizer = new System.Speech.Synthesis.SpeechSynthesizer();
+                _sapiSynthesizer.SpeakProgress += (s, e) =>
+                {
+                    OnSpeakProgress?.Invoke(e.CharacterPosition, e.CharacterCount, e.Text ?? string.Empty);
+                };
+                _sapiSynthesizer.SpeakCompleted += (s, e) =>
+                {
+                    Status = SynthesisStatus.Idle;
+                    if (e.Error != null)
+                    {
+                        OnError?.Invoke($"Seslendirme hatası: {e.Error.Message}");
+                    }
+                    else
+                    {
+                        OnSpeakCompleted?.Invoke();
+                    }
+                };
+                _sapiSynthesizer.StateChanged += (s, e) =>
+                {
+                    switch (e.State)
+                    {
+                        case SynthesizerState.Speaking:
+                            Status = SynthesisStatus.Speaking;
+                            break;
+                        case SynthesizerState.Paused:
+                            Status = SynthesisStatus.Paused;
+                            break;
+                        case SynthesizerState.Ready:
+                            Status = SynthesisStatus.Idle;
+                            break;
+                    }
+                };
             }
             catch (Exception ex)
             {
-                OnError?.Invoke($"Konuşma sentezleyici başlatılamadı: {ex.Message}");
+                OnError?.Invoke($"SAPI konuşma motoru başlatılamadı: {ex.Message}");
             }
         }
 
-        private void Synthesizer_SpeakProgress(object? sender, SpeakProgressEventArgs e)
+        private void InitializeOneCore()
         {
-            OnSpeakProgress?.Invoke(e.CharacterPosition, e.CharacterCount, e.Text ?? string.Empty);
-        }
+            try
+            {
+                _oneCoreSynthesizer = new Windows.Media.SpeechSynthesis.SpeechSynthesizer();
+                _mediaPlayer = new MediaPlayer
+                {
+                    AutoPlay = true,
+                    Volume = _volume / 100.0
+                };
 
-        private void Synthesizer_SpeakCompleted(object? sender, SpeakCompletedEventArgs e)
-        {
-            Status = SynthesisStatus.Idle;
-            if (e.Error != null)
-            {
-                OnError?.Invoke($"Seslendirme hatası: {e.Error.Message}");
-            }
-            else
-            {
-                OnSpeakCompleted?.Invoke();
-            }
-        }
-
-        private void Synthesizer_StateChanged(object? sender, StateChangedEventArgs e)
-        {
-            switch (e.State)
-            {
-                case SynthesizerState.Speaking:
-                    Status = SynthesisStatus.Speaking;
-                    break;
-                case SynthesizerState.Paused:
-                    Status = SynthesisStatus.Paused;
-                    break;
-                case SynthesizerState.Ready:
+                _mediaPlayer.MediaEnded += (s, e) =>
+                {
                     Status = SynthesisStatus.Idle;
-                    break;
+                    OnSpeakCompleted?.Invoke();
+                };
+
+                _mediaPlayer.MediaFailed += (s, e) =>
+                {
+                    Status = SynthesisStatus.Idle;
+                    OnError?.Invoke($"OneCore ses çalma hatası: {e.ErrorMessage}");
+                };
+            }
+            catch (Exception ex)
+            {
+                OnError?.Invoke($"OneCore motoru başlatılamadı: {ex.Message}");
             }
         }
 
         /// <summary>
-        /// İşletim sisteminde yüklü ses profillerini listeler.
+        /// Sistemde bulunan tüm sesleri (Türkçe OneCore Tolga ve SAPI sesleri dahil) listeler.
+        /// Türkçe sesler listenin en başında yer alır.
         /// </summary>
         public List<VoiceModel> GetAvailableVoices()
         {
             var list = new List<VoiceModel>();
-            if (_synthesizer == null) return list;
 
+            // 1. OneCore Modern Sesleri (Türkçe Tolga vb.)
             try
             {
-                foreach (InstalledVoice voice in _synthesizer.GetInstalledVoices())
+                foreach (VoiceInformation v in Windows.Media.SpeechSynthesis.SpeechSynthesizer.AllVoices)
                 {
+                    CultureInfo culture;
+                    try { culture = new CultureInfo(v.Language); }
+                    catch { culture = CultureInfo.InvariantCulture; }
+
                     list.Add(new VoiceModel
                     {
-                        Name = voice.VoiceInfo?.Name ?? "Bilinmeyen Ses",
-                        Culture = voice.VoiceInfo?.Culture ?? System.Globalization.CultureInfo.InvariantCulture,
-                        Gender = voice.VoiceInfo?.Gender.ToString() ?? "Belirtilmemiş",
-                        Age = voice.VoiceInfo?.Age.ToString() ?? "Belirtilmemiş",
-                        Enabled = voice.Enabled
+                        Name = v.DisplayName,
+                        Culture = culture,
+                        Gender = v.Gender.ToString(),
+                        Age = "Adult",
+                        Enabled = true,
+                        Engine = VoiceEngine.OneCore,
+                        VoiceId = v.Id
                     });
                 }
             }
-            catch (Exception ex)
+            catch { }
+
+            // 2. SAPI 5 Sesleri
+            if (_sapiSynthesizer != null)
             {
-                OnError?.Invoke($"Ses profilleri taranırken hata: {ex.Message}");
+                try
+                {
+                    foreach (InstalledVoice voice in _sapiSynthesizer.GetInstalledVoices())
+                    {
+                        // OneCore ile mükerrer olanları filtrele
+                        if (voice.VoiceInfo != null && list.Any(x => x.Name.Equals(voice.VoiceInfo.Name, StringComparison.OrdinalIgnoreCase)))
+                            continue;
+
+                        list.Add(new VoiceModel
+                        {
+                            Name = voice.VoiceInfo?.Name ?? "SAPI Ses",
+                            Culture = voice.VoiceInfo?.Culture ?? CultureInfo.InvariantCulture,
+                            Gender = voice.VoiceInfo?.Gender.ToString() ?? "Belirtilmemiş",
+                            Age = voice.VoiceInfo?.Age.ToString() ?? "Belirtilmemiş",
+                            Enabled = voice.Enabled,
+                            Engine = VoiceEngine.Sapi5,
+                            VoiceId = voice.VoiceInfo?.Name ?? string.Empty
+                        });
+                    }
+                }
+                catch { }
             }
 
-            return list;
+            // Türkçe sesleri en başa al, ardından diğer diller
+            return list.OrderByDescending(v => v.Culture.TwoLetterISOLanguageName.Equals("tr", StringComparison.OrdinalIgnoreCase))
+                       .ThenBy(v => v.DisplayName)
+                       .ToList();
         }
 
-        /// <summary>
-        /// Belirtilen ses profilini seçer.
-        /// </summary>
-        public bool SelectVoice(string voiceName)
+        public bool SelectVoice(VoiceModel voice)
         {
-            if (_synthesizer == null) return false;
+            if (voice == null) return false;
+            _selectedVoice = voice;
 
             try
             {
-                _synthesizer.SelectVoice(voiceName);
-                return true;
+                if (voice.Engine == VoiceEngine.OneCore && _oneCoreSynthesizer != null)
+                {
+                    var target = Windows.Media.SpeechSynthesis.SpeechSynthesizer.AllVoices.FirstOrDefault(v => v.Id == voice.VoiceId || v.DisplayName == voice.Name);
+                    if (target != null)
+                    {
+                        _oneCoreSynthesizer.Voice = target;
+                        return true;
+                    }
+                }
+                else if (voice.Engine == VoiceEngine.Sapi5 && _sapiSynthesizer != null)
+                {
+                    _sapiSynthesizer.SelectVoice(voice.Name);
+                    return true;
+                }
             }
             catch (Exception ex)
             {
                 OnError?.Invoke($"Ses profili seçilemedi: {ex.Message}");
-                return false;
             }
+            return false;
         }
 
         /// <summary>
-        /// Verilen metni asenkron olarak seslendirir.
+        /// Metni seçili motor ile (SAPI veya Türkçe OneCore) seslendirir.
         /// </summary>
-        public bool SpeakAsync(string text)
+        public async Task<bool> SpeakAsync(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return false;
 
-            if (_synthesizer == null)
+            Stop();
+
+            if (_selectedVoice == null)
             {
-                InitializeSynthesizer();
-                if (_synthesizer == null) return false;
+                var voices = GetAvailableVoices();
+                if (voices.Count > 0) SelectVoice(voices[0]);
+            }
+
+            if (_selectedVoice == null)
+            {
+                OnError?.Invoke("Sistemde kullanılabilir ses profili bulunamadı.");
+                return false;
             }
 
             try
             {
-                // Eğer zaten seslendiriliyorsa önce durdur
-                if (Status == SynthesisStatus.Speaking || Status == SynthesisStatus.Paused)
-                {
-                    _synthesizer.SpeakAsyncCancelAll();
-                }
-
                 Status = SynthesisStatus.Speaking;
-                _synthesizer.SpeakAsync(text);
-                return true;
+
+                if (_selectedVoice.Engine == VoiceEngine.OneCore && _oneCoreSynthesizer != null && _mediaPlayer != null)
+                {
+                    // OneCore (Türkçe Tolga) seslendirmesi
+                    SpeechSynthesisStream stream = await _oneCoreSynthesizer.SynthesizeTextToStreamAsync(text);
+                    _mediaPlayer.Source = MediaSource.CreateFromStream(stream, stream.ContentType);
+                    _mediaPlayer.PlaybackSession.PlaybackRate = RateToPlaybackSpeed(_rate);
+                    _mediaPlayer.Volume = _volume / 100.0;
+                    _mediaPlayer.Play();
+                    return true;
+                }
+                else if (_sapiSynthesizer != null)
+                {
+                    // SAPI 5 (İngilizce Zira vb.) seslendirmesi
+                    _sapiSynthesizer.Rate = _rate;
+                    _sapiSynthesizer.Volume = _volume;
+                    _sapiSynthesizer.SpeakAsync(text);
+                    return true;
+                }
             }
             catch (Exception ex)
             {
                 Status = SynthesisStatus.Idle;
-                OnError?.Invoke($"Seslendirme başlatılırken hata: {ex.Message}");
+                OnError?.Invoke($"Seslendirme hatası: {ex.Message}");
                 return false;
             }
+
+            return false;
         }
 
-        /// <summary>
-        /// Devam eden seslendirmeyi duraklatır.
-        /// </summary>
         public void Pause()
         {
-            if (_synthesizer != null && Status == SynthesisStatus.Speaking)
+            if (Status != SynthesisStatus.Speaking) return;
+
+            try
             {
-                try
+                if (_selectedVoice?.Engine == VoiceEngine.OneCore && _mediaPlayer != null)
                 {
-                    _synthesizer.Pause();
+                    _mediaPlayer.Pause();
                     Status = SynthesisStatus.Paused;
                 }
-                catch (Exception ex)
+                else if (_sapiSynthesizer != null)
                 {
-                    OnError?.Invoke($"Duraklatma hatası: {ex.Message}");
+                    _sapiSynthesizer.Pause();
+                    Status = SynthesisStatus.Paused;
                 }
+            }
+            catch (Exception ex)
+            {
+                OnError?.Invoke($"Duraklatma hatası: {ex.Message}");
             }
         }
 
-        /// <summary>
-        /// Duraklatılmış seslendirmeye devam eder.
-        /// </summary>
         public void Resume()
         {
-            if (_synthesizer != null && Status == SynthesisStatus.Paused)
+            if (Status != SynthesisStatus.Paused) return;
+
+            try
             {
-                try
+                if (_selectedVoice?.Engine == VoiceEngine.OneCore && _mediaPlayer != null)
                 {
-                    _synthesizer.Resume();
+                    _mediaPlayer.Play();
                     Status = SynthesisStatus.Speaking;
                 }
-                catch (Exception ex)
+                else if (_sapiSynthesizer != null)
                 {
-                    OnError?.Invoke($"Devam ettirme hatası: {ex.Message}");
+                    _sapiSynthesizer.Resume();
+                    Status = SynthesisStatus.Speaking;
                 }
+            }
+            catch (Exception ex)
+            {
+                OnError?.Invoke($"Devam ettirme hatası: {ex.Message}");
             }
         }
 
-        /// <summary>
-        /// Seslendirmeyi tamamen durdurur ve başa alır.
-        /// </summary>
         public void Stop()
         {
-            if (_synthesizer != null)
+            try
             {
-                try
+                if (_mediaPlayer != null)
                 {
-                    _synthesizer.SpeakAsyncCancelAll();
-                    Status = SynthesisStatus.Idle;
+                    _mediaPlayer.Pause();
+                    _mediaPlayer.Source = null;
                 }
-                catch (Exception ex)
+
+                if (_sapiSynthesizer != null)
                 {
-                    OnError?.Invoke($"Durdurma hatası: {ex.Message}");
+                    _sapiSynthesizer.SpeakAsyncCancelAll();
                 }
+
+                Status = SynthesisStatus.Idle;
             }
+            catch { }
         }
 
         /// <summary>
-        /// Verilen metni doğrudan bir .wav ses dosyasına kaydeder.
+        /// Metni seçili ses profili ile .wav ses dosyasına kaydeder.
         /// </summary>
-        public bool ExportToWav(string text, string wavFilePath)
+        public async Task<bool> ExportToWavAsync(string text, string wavFilePath)
         {
             if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(wavFilePath)) return false;
 
             try
             {
-                using var fileSynth = new SpeechSynthesizer();
-                // O anki seçili ses profilini, hız ve ses düzeyini uygula
-                if (_synthesizer != null)
+                if (_selectedVoice?.Engine == VoiceEngine.OneCore && _oneCoreSynthesizer != null)
                 {
-                    fileSynth.Rate = _synthesizer.Rate;
-                    fileSynth.Volume = _synthesizer.Volume;
-                    try
-                    {
-                        if (_synthesizer.Voice != null && !string.IsNullOrEmpty(_synthesizer.Voice.Name))
-                        {
-                            fileSynth.SelectVoice(_synthesizer.Voice.Name);
-                        }
-                    }
-                    catch { }
+                    using SpeechSynthesisStream stream = await _oneCoreSynthesizer.SynthesizeTextToStreamAsync(text);
+                    using Stream netStream = stream.AsStreamForRead();
+                    using FileStream fileStream = File.Create(wavFilePath);
+                    await netStream.CopyToAsync(fileStream);
+                    return true;
                 }
+                else if (_sapiSynthesizer != null)
+                {
+                    using var fileSynth = new System.Speech.Synthesis.SpeechSynthesizer();
+                    fileSynth.Rate = _rate;
+                    fileSynth.Volume = _volume;
+                    if (_sapiSynthesizer.Voice != null && !string.IsNullOrEmpty(_sapiSynthesizer.Voice.Name))
+                    {
+                        try { fileSynth.SelectVoice(_sapiSynthesizer.Voice.Name); } catch { }
+                    }
 
-                var audioFormat = new SpeechAudioFormatInfo(44100, AudioBitsPerSample.Sixteen, AudioChannel.Stereo);
-                fileSynth.SetOutputToWaveFile(wavFilePath, audioFormat);
-                fileSynth.Speak(text);
-                fileSynth.SetOutputToNull();
-                return true;
+                    var audioFormat = new SpeechAudioFormatInfo(44100, AudioBitsPerSample.Sixteen, AudioChannel.Stereo);
+                    fileSynth.SetOutputToWaveFile(wavFilePath, audioFormat);
+                    fileSynth.Speak(text);
+                    fileSynth.SetOutputToNull();
+                    return true;
+                }
             }
             catch (Exception ex)
             {
                 OnError?.Invoke($"WAV dosyası oluşturulamadı: {ex.Message}");
                 return false;
             }
+
+            return false;
+        }
+
+        private static double RateToPlaybackSpeed(int rate)
+        {
+            // -10: 0.5x, 0: 1.0x, +10: 2.0x
+            if (rate < 0)
+                return 1.0 + (rate * 0.05); // 0 -> 1.0, -10 -> 0.5
+            else
+                return 1.0 + (rate * 0.1);  // 0 -> 1.0, +10 -> 2.0
         }
 
         public void Dispose()
@@ -300,16 +435,16 @@ namespace SpeechApp.Services
             if (!_disposed)
             {
                 _disposed = true;
-                if (_synthesizer != null)
-                {
-                    try
-                    {
-                        _synthesizer.SpeakAsyncCancelAll();
-                        _synthesizer.Dispose();
-                    }
-                    catch { }
-                    _synthesizer = null;
-                }
+                Stop();
+
+                _mediaPlayer?.Dispose();
+                _mediaPlayer = null;
+
+                _oneCoreSynthesizer?.Dispose();
+                _oneCoreSynthesizer = null;
+
+                _sapiSynthesizer?.Dispose();
+                _sapiSynthesizer = null;
             }
         }
     }

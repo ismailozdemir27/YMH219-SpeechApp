@@ -3,18 +3,18 @@
 ![C#](https://img.shields.io/badge/C%23-239120?style=for-the-badge&logo=c-sharp&logoColor=white)
 ![.NET 8](https://img.shields.io/badge/.NET%208.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)
 ![Windows Forms](https://img.shields.io/badge/Windows%20Forms-0078D7?style=for-the-badge&logo=windows&logoColor=white)
-![System.Speech](https://img.shields.io/badge/System.Speech-8.0.0-blueviolet?style=for-the-badge)
+![Türkçe Ses Desteği](https://img.shields.io/badge/T%C3%BCrk%C3%A7e%20TTS-Tolga%20(tr--TR)-red?style=for-the-badge)
 ![Status](https://img.shields.io/badge/Status-Completed-success?style=for-the-badge)
 
-Bu proje, **Nesne Tabanlı Programlama (YMH 219)** dersi laboratuvar / ek uygulama ödevleri kapsamında geliştirilmiş nesne yönelimli bir **Çift Yönlü Konuşma ve Ses İşleme (Speech-to-Text / Text-to-Speech)** masaüstü uygulamasıdır.
+Bu proje, **Nesne Tabanlı Programlama (YMH 219)** dersi laboratuvar / ek uygulama ödevleri kapsamında geliştirilmiş nesne yönelimli, çok motorlu bir **Çift Yönlü Konuşma ve Ses İşleme (Speech-to-Text / Text-to-Speech)** masaüstü uygulamasıdır.
 
-Uygulama; Windows Forms ve .NET `System.Speech` (`System.Speech.Synthesis` ve `System.Speech.Recognition`) kütüphaneleri kullanılarak metinlerin yapay ses ile seslendirilmesini, mikrofondan alınan konuşmaların yazıya dökülmesini, ses hızı/düzeyi ayarlarını, canlı kelime takibini ve konuşma geçmişinin `.txt` / `.wav` olarak dışa aktarılmasını sağlar.
+Uygulama; Windows Forms, .NET `System.Speech` ve `Windows.Media.SpeechSynthesis` (WinRT OneCore) altyapılarını bir araya getirerek hem **Türkçe (Microsoft Tolga)** hem de **İngilizce (Microsoft Zira vb.)** doğal sesleriyle akıcı metin okuma, mikrofondan konuşma tanıma, sesli komut algılama, canlı ekolayzır animasyonu ve konuşma geçmişini `.txt` / `.wav` olarak dışa aktarma işlevlerini sunar.
 
 ---
 
 ## 📸 Ekran Görüntüleri
 
-| 🗣️ Metinden Sese (Text-to-Speech) & Canlı Kelime Vurgulama | 🎙️ Sesten Metne (Speech-to-Text) & Zaman Damgalı Geçmiş |
+| 🗣️ Metinden Sese (Text-to-Speech) & Türkçe Ses & Canlı Vurgulama | 🎙️ Sesten Metne (Speech-to-Text) & Sesli Komut & Çift Yönlü Entegrasyon |
 | :---: | :---: |
 | ![Metinden Sese Paneli](screenshots/tts_panel.png) | ![Sesten Metne Paneli](screenshots/stt_panel.png) |
 
@@ -23,12 +23,13 @@ Uygulama; Windows Forms ve .NET `System.Speech` (`System.Speech.Synthesis` ve `S
 ## 🛠️ Kullanılan Teknolojiler ve Kütüphaneler
 
 - **Programlama Dili:** C# 12
-- **Çalışma Zamanı (Runtime):** .NET 8.0 Windows Desktop (`net8.0-windows`)
+- **Çalışma Zamanı (Runtime):** .NET 8.0 Windows Desktop (`net8.0-windows10.0.19041.0`)
 - **Arayüz Kütüphanesi:** Windows Forms (WinForms)
-- **Konuşma Kütüphanesi:** `System.Speech` 8.0.0 (Microsoft resmi konuşma kütüphanesi)
-  - `System.Speech.Synthesis`: Metin okuma, ses profilleri, duraklatma/devam ettirme, WAV çıktısı.
-  - `System.Speech.Recognition`: Mikrofon dinleme, dilbilgisi kuralları (`DictationGrammar`), güven puanı ve ses seviyesi (VU).
-- **Dosya I/O:** `System.IO.StreamWriter` (UTF-8 formatında yapılandırılmış transkript ve metin dışa aktarımı)
+- **Konuşma Motorları:**
+  - `Windows.Media.SpeechSynthesis` & `Windows.Media.Playback.MediaPlayer`: Modern Windows OneCore **Türkçe Ses Motoru (Microsoft Tolga - tr-TR)**.
+  - `System.Speech.Synthesis`: Klasik SAPI 5 masaüstü ses motoru (Microsoft Zira vb.).
+  - `System.Speech.Recognition`: Mikrofon dinleme, serbest dikte (`DictationGrammar`), anahtar kelime dilbilgisi (`Choices`), güven skoru ve ses seviyesi (VU).
+- **Dosya I/O:** `System.IO.StreamWriter` ve `System.IO.File` (UTF-8 rapor, dosya yükleme ve WAV çıktıları).
 
 ---
 
@@ -37,7 +38,7 @@ Uygulama; Windows Forms ve .NET `System.Speech` (`System.Speech.Synthesis` ve `S
 ### Gereksinimler
 - [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) veya üzeri
 - Windows 10 / 11 işletim sistemi
-- Mikrofon (Konuşma tanıma testi için) ve Hoparlör / Kulaklık (Metin okuma için)
+- Hoparlör / Kulaklık (Metin okuma için) ve Mikrofon (Konuşma tanıma testi için)
 
 ### 1. Depoyu Klonlama
 ```bash
@@ -54,47 +55,57 @@ dotnet build
 ```bash
 dotnet run
 ```
-*Veya `SpeechApp.csproj` dosyasını Visual Studio 2022 ile açıp `F5` tuşu ile başlatabilirsiniz.*
+*Veya `SpeechApp.csproj` dosyasını Visual Studio 2022 ile açıp `F5` tuşuna basarak çalıştırabilirsiniz.*
 
 ---
 
 ## ✨ Uygulamanın Temel Özellikleri
 
 ### 1. 🗣️ Metinden Sese (Text-to-Speech / TTS)
-- **Metin Okuma:** `RichTextBox` içine yazılan veya yapıştırılan her türlü metni yapay zeka ses sentezleyicisi ile seslendirir.
+- **🇹🇷 Doğal Türkçe Okuma:** Windows OneCore **Microsoft Tolga (tr-TR)** ses motoru entegrasyonu ile Türkçe metinleri pürüzsüz ve doğal tonlamayla okur.
+- **🌐 Çoklu Dil ve Ses Profilleri:** Sistemdeki tüm Türkçe ve yabancı sesleri otomatik tanır ve açılır menüde listeler.
 - **Oynatma Kontrolleri:**
-  - **▶ Oynat (Speak):** Metni baştan veya kaldığı yerden okur.
-  - **⏸ Duraklat (Pause):** Seslendirmeyi anında dondurur.
-  - **▶ Devam Et (Resume):** Duraklatılan yerden kesintisiz devam eder.
-  - **⏹ Durdur (Stop):** Seslendirmeyi tamamen sonlandırır.
-  - **🗑️ Temizle (Clear):** Metin alanını sıfırlar.
-- **Canlı Kelime Vurgulama (Word Highlighting):** Okuma esnasında `SpeakProgress` olayı ile o an telaffuz edilen kelime sarı renkle canlı olarak işaretlenir.
+  - **▶ Oynat (Speak):** Metni seslendirir.
+  - **⏸ Duraklat (Pause):** Okumayı anında dondurur.
+  - **▶ Devam (Resume):** Kaldığı yerden devam eder.
+  - **⏹ Durdur (Stop):** Okumayı tamamen durdurur.
+  - **🗑️ Temizle (Clear):** Metin alanını temizler.
+- **Canlı Kelime Vurgulama (Karaoke):** Okunan kelime `SpeakProgress` olayı ile metin üzerinde anlık olarak sarı renkle işaretlenir.
+- **🎵 Hareketli Ses Dalgası (Waveform):** Ses çalarken ritmik olarak dalgalanan görsel ekolayzır çubukları.
 
 ### 2. 🎙️ Sesten Metne (Speech-to-Text / STT)
 - **Mikrofon Dinleme:** ▶ *Dinlemeyi Başlat* ve ⏹ *Dinlemeyi Durdur* butonları ile mikrofonu kontrol eder.
-- **Canlı Transkript:** Mikrofondan konuşulan cümleler anlık olarak transkript alanına aktarılır.
-- **Zaman Damgalı ve Güven Puanlı Geçmiş Tablosu:**
-  - Her algılanan konuşma; sıra numarası, zaman damgası (`HH:mm:ss.fff`), kaynak (`Mikrofon` / `Simülasyon`), güven yüzdesi (`%94.2`) ve algılanan metin ile `DataGridView` üzerinde listelenir.
-- **Canlı VU Meter (Ses Seviyesi):** Konuşma esnasında mikrofon giriş seviyesini (`0 - 100`) canlı ProgressBar üzerinde gösterir.
-- **Donanım ve Servis Kontrolü:** Mikrofon takılı olmadığında veya sistemde SAPI tanıyıcı motoru bulunmadığında çökme yaşanmaz, kullanıcıya anlaşılır yönlendirme mesajı gösterilir.
+- **Canlı Transkript:** Algılanan konuşmalar anında zaman damgasıyla transkript metin kutusuna düşer.
+- **Zaman Damgalı Geçmiş Tablosu (`DataGridView`):**
+  - Sıra No, Zaman Damgası (`HH:mm:ss.fff`), Kaynak (`Mikrofon` / `Simülasyon`), Güven Puanı (`%96.4`) ve Algılanan Cümleyi ayrıntılı listeler.
+- **Canlı VU Meter:** Mikrofon ses giriş seviyesini (`0 - 100`) canlı ProgressBar üzerinde görselleştirir.
+- **Hata Toleransı ve Çökmeme:** Mikrofon takılı olmadığında veya SAPI dil paketi eksik olduğunda uygulama çökmez, kullanıcıya anlaşılır yönlendirme mesajı sunar.
 
 ---
 
 ## 🌟 İsteğe Bağlı / Ek Puan Geliştirmeleri (Tam Puan Kapsamı)
 
-Laboratuvar yönergesindeki ek puan kriterlerinin tümü uygulanmıştır:
-
-1. **Ses Hızı ve Ses Düzeyi Ayarı (Rate & Volume):**
-   - Hız kaydırıcısı (`TrackBar`): `-10` (en yavaş) ile `+10` (en hızlı) arasında dinamik kontrol.
-   - Ses seviyesi kaydırıcısı: `%0` ile `%100` arasında gerçek zamanlı ses seviyesi kontrolü.
-2. **Ses Profili Seçimi (Voice Selection):**
-   - Windows üzerinde yüklü tüm ses motorlarını (kadın/erkek, farklı diller) otomatik tarar ve açılır kutuda listeler.
-3. **Dönüştürülen Metni Dosyaya Kaydetme (`StreamWriter`):**
-   - *"Metni Kaydet (.txt)"* ve *"Transkripti Kaydet (.txt)"* butonları ile UTF-8 formatında yapılandırılmış rapor çıktısı üretir.
-4. **WAV Ses Dosyasına Aktarma (`.wav Export`):**
-   - Yazılan metni doğrudan `.wav` formatında bir ses dosyası olarak dışa aktarır (`SpeechAudioFormatInfo`).
-5. **Laboratuvar Sunumu & Simülasyon Desteği:**
-   - Mikrofonu veya Windows SAPI dil paketi olmayan bilgisayarlarda öğretmen veya öğrencinin STT işlevini, transkripti ve log tablosunu tam olarak test edebilmesi için *"🧪 Test Konuşması Simüle Et"* aracı entegre edilmiştir.
+1. **🗣️ ⇄ 🎙️ Çift Yönlü Entegrasyon ("Konuşulanı TTS ile Oku"):**
+   - STT sekmesinde algılanan konuşma metnini tek tıkla TTS sekmesine aktarır ve yapay sesle anında seslendirir. İki teknolojinin birbirini beslediği entegre bir döngü kurulmuştur.
+2. **📂 Metin Dosyası Yükleme & Sürükle-Bırak (Drag & Drop):**
+   - Masaüstünden herhangi bir `.txt` dosyasını pencereye sürükleyip bırakarak veya *"📂 Dosyadan Yükle"* butonu ile doğrudan metin alanına aktarabilme.
+3. **📊 Canlı Metin İstatistikleri & Tahmini Okuma Süresi:**
+   - Metin kutusunun altında anlık karakter, kelime, cümle sayısı ve seçilen ses hızına göre hesaplanan **Tahmini Okuma Süresi (sn)**.
+4. **⚡ Sesli Komut Algılama (Voice Commands):**
+   - Konuşma esnasında geçen anahtar kelimelerle arayüz kontrolü:
+     - *"Temizle"* -> Geçmişi ve transkripti temizler.
+     - *"Kaydet"* -> Kaydetme penceresini açar.
+     - *"Durdur"* -> Dinlemeyi sonlandırır.
+     - *"Oku / Seslendir"* -> Metni TTS'e aktarıp okur.
+5. **🔍 Erişilebilirlik - Font Boyutu (A+ / A-):**
+   - Metin kutularının yazı boyutunu tek tıkla büyütüp küçültebilme.
+6. **Hız ve Ses Düzeyi Kontrolü:**
+   - Hız kaydırıcısı (`-10` ile `+10` arası) ve Ses düzeyi (`%0` ile `%100` arası) dinamik ayarı.
+7. **Dışa Aktarma:**
+   - Metinleri ve konuşma dökümlerini `StreamWriter` ile `.txt` formatında kaydetme.
+   - Yazılan metni doğrudan `.wav` ses dosyasına dönüştürme.
+8. **Laboratuvar Sunumu & Simülasyon Desteği:**
+   - SAPI dil paketi veya mikrofon bulunmayan ortamlarda test yapabilmek için örnek konuşma simülasyonu.
 
 ---
 
@@ -106,29 +117,22 @@ YMH219-SpeechApp/
 │   ├── SynthesisStatus.cs      # Idle, Speaking, Paused
 │   └── RecognitionStatus.cs    # Idle, Listening, Processing, Unavailable
 ├── Models/
-│   ├── VoiceModel.cs           # Name, Culture, Gender, Age, DisplayName
+│   ├── VoiceModel.cs           # Name, Culture, Gender, Engine (SAPI5/OneCore), FlagEmoji
 │   └── SpeechLogEntry.cs       # Id, Timestamp, Text, Confidence, Source, Format
 ├── Services/
-│   ├── TextToSpeechService.cs  # SpeechSynthesizer sarmalayıcısı (Hız, Seviye, Oynat/Durdur, WAV)
-│   ├── SpeechToTextService.cs  # SpeechRecognitionEngine ve mikrofon yönetimi (Güven puanı, VU, Fallback)
+│   ├── TextToSpeechService.cs  # Çok motorlu TTS (OneCore Tolga + SAPI Zira, Rate, Volume, WAV)
+│   ├── SpeechToTextService.cs  # SpeechRecognitionEngine mikrofon yönetimi (Güven skoru, VU, Fallback)
 │   └── FileExportService.cs    # StreamWriter tabanlı TXT rapor ve transkript dışa aktarıcısı
 ├── Forms/
-│   ├── MainForm.cs             # Çift sekmeli kullanıcı arayüzü ve olay yönetimi
-│   └── MainForm.Designer.cs    # Arayüz bileşenleri ve görsel yerleşim
-├── Program.cs                  # Uygulama giriş noktası ve otomatik ekran görüntüsü üreticisi
+│   ├── MainForm.cs             # Çift sekmeli arayüz, sesli komutlar, sürükle-bırak, istatistikler
+│   └── MainForm.Designer.cs    # Modern UI bileşenleri ve görsel yerleşim
+├── Program.cs                  # Giriş noktası ve otomatik ekran görüntüsü üreticisi
 ├── screenshots/                # README ekran görüntüleri
 │   ├── tts_panel.png
 │   └── stt_panel.png
 ├── .gitignore                  # Visual Studio / .NET için tam yalıtım
-└── SpeechApp.csproj            # .NET 8.0 Windows Forms ve System.Speech proje dosyası
+└── SpeechApp.csproj            # .NET 8.0 Windows 10 SDK ve System.Speech proje dosyası
 ```
-
----
-
-## ⚠️ Bilinen Sınırlamalar / Bilgilendirme Notları
-
-- **Konuşma Tanıma (STT) Dil Desteği:** Windows `System.Speech.Recognition` altyapısı, sistemde kurulu olan SAPI 5 tanıyıcı dil paketlerini kullanır. Eğer bilgisayarınızda İngilizce veya Türkçe SAPI konuşma tanıyıcı paketi yüklü değilse, uygulama çökmeden kullanıcıyı uyarır ve testlerinizi gerçekleştirebilmeniz için entegre simülasyon modunu devreye sokar.
-- **Ses Profilleri:** Okuma esnasında kullanılan sesler (`Microsoft Zira`, `Microsoft David` vb.) kullanıcının Windows işletim sisteminde yüklü olan ses paketlerine bağlı olarak çeşitlilik gösterir.
 
 ---
 

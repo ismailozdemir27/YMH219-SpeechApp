@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using SpeechApp.Enums;
@@ -18,6 +20,8 @@ namespace SpeechApp.Forms
         private List<VoiceModel> _availableVoices = new List<VoiceModel>();
         private int _lastHighlightPos = -1;
         private int _lastHighlightLen = 0;
+        private float _currentFontSize = 12.0f;
+        private readonly Random _rand = new Random();
 
         public MainForm()
         {
@@ -27,6 +31,7 @@ namespace SpeechApp.Forms
             _sttService = new SpeechToTextService();
             _exportService = new FileExportService();
 
+            InitializeWaveformBars();
             InitializeGrid();
             InitializeSamplePhrases();
             BindTtsEvents();
@@ -42,17 +47,56 @@ namespace SpeechApp.Forms
             UpdateRecognizerDisplay();
             UpdateTtsUIState(SynthesisStatus.Idle);
             UpdateSttUIState(_sttService.Status, "Hazır");
+            UpdateTextStatistics();
+
+            tmrWaveform.Interval = 90;
+            tmrWaveform.Tick += TmrWaveform_Tick;
+            tmrWaveform.Start();
         }
 
         private void MainForm_FormClosing(object? sender, FormClosingEventArgs e)
         {
+            tmrWaveform.Stop();
             _ttsService.Stop();
             _sttService.StopListening();
             _ttsService.Dispose();
             _sttService.Dispose();
         }
 
-        #region --- GRİD & ÖRNEK VERİ İNİT ---
+        #region --- GÖRSEL DALGA VE GRİD İNİT ---
+
+        private void InitializeWaveformBars()
+        {
+            lblBars = new Label[5];
+            int barWidth = 8;
+            int gap = 5;
+
+            for (int i = 0; i < 5; i++)
+            {
+                lblBars[i] = new Label
+                {
+                    Width = barWidth,
+                    Height = 6,
+                    BackColor = Color.FromArgb(56, 189, 248), // sky blue
+                    Location = new Point(i * (barWidth + gap) + 10, 20),
+                    Anchor = AnchorStyles.Bottom | AnchorStyles.Left
+                };
+                pnlWaveform.Controls.Add(lblBars[i]);
+            }
+        }
+
+        private void TmrWaveform_Tick(object? sender, EventArgs e)
+        {
+            bool active = _ttsService.Status == SynthesisStatus.Speaking || _sttService.Status == RecognitionStatus.Listening;
+
+            for (int i = 0; i < lblBars.Length; i++)
+            {
+                int targetHeight = active ? _rand.Next(6, 26) : 4;
+                lblBars[i].Height = targetHeight;
+                lblBars[i].Top = pnlWaveform.Height - targetHeight - 2;
+                lblBars[i].BackColor = active ? Color.FromArgb(74, 222, 128) : Color.FromArgb(100, 116, 139);
+            }
+        }
 
         private void InitializeGrid()
         {
@@ -62,34 +106,34 @@ namespace SpeechApp.Forms
             {
                 Name = "colId",
                 HeaderText = "#",
-                Width = 50
+                Width = 45
             });
 
             dgvSpeechLogs.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "colTime",
                 HeaderText = "Zaman Damgası",
-                Width = 140
+                Width = 135
             });
 
             dgvSpeechLogs.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "colSource",
                 HeaderText = "Kaynak",
-                Width = 120
+                Width = 110
             });
 
             dgvSpeechLogs.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "colConfidence",
                 HeaderText = "Güven",
-                Width = 90
+                Width = 85
             });
 
             dgvSpeechLogs.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "colText",
-                HeaderText = "Algılanan Metin",
+                HeaderText = "Algılanan Cümle",
                 AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill
             });
         }
@@ -97,10 +141,10 @@ namespace SpeechApp.Forms
         private void InitializeSamplePhrases()
         {
             cmbSamplePhrases.Items.Clear();
-            cmbSamplePhrases.Items.Add("Merhaba dünya, konuşma tanıma testi başarılı.");
+            cmbSamplePhrases.Items.Add("Merhaba dünya, Türkçe konuşma tanıma testi.");
             cmbSamplePhrases.Items.Add("Nesne Tabanlı Programlama (YMH 219) laboratuvar ödevi.");
             cmbSamplePhrases.Items.Add("İsmail Özdemir, öğrenci numarası: 250541109.");
-            cmbSamplePhrases.Items.Add("Windows Forms ve C# ile modern arayüz geliştirme.");
+            cmbSamplePhrases.Items.Add("Windows Forms ve C# ile modern arayüz tasarımı.");
             cmbSamplePhrases.Items.Add("Text-to-Speech ve Speech-to-Text çift yönlü dönüşüm çalışıyor.");
             cmbSamplePhrases.SelectedIndex = 0;
         }
@@ -108,14 +152,7 @@ namespace SpeechApp.Forms
         private void UpdateRecognizerDisplay()
         {
             lblRecognizerInfo.Text = $"Motor: {_sttService.RecognizerName}";
-            if (!_sttService.IsRecognizerAvailable)
-            {
-                lblRecognizerInfo.ForeColor = Color.FromArgb(248, 113, 113); // soft red
-            }
-            else
-            {
-                lblRecognizerInfo.ForeColor = Color.FromArgb(74, 222, 128); // soft green
-            }
+            lblRecognizerInfo.ForeColor = _sttService.IsRecognizerAvailable ? Color.FromArgb(74, 222, 128) : Color.FromArgb(248, 113, 113);
         }
 
         #endregion
@@ -142,7 +179,7 @@ namespace SpeechApp.Forms
             }
 
             cmbVoices.SelectedIndex = 0;
-            _ttsService.SelectVoice(_availableVoices[0].Name);
+            _ttsService.SelectVoice(_availableVoices[0]);
         }
 
         private void BindTtsEvents()
@@ -152,13 +189,58 @@ namespace SpeechApp.Forms
             _ttsService.OnSpeakCompleted += Tts_OnSpeakCompleted;
             _ttsService.OnError += Tts_OnError;
 
+            // Metin değiştiğinde istatistikleri güncelle
+            rtbTtsInput.TextChanged += (s, e) => UpdateTextStatistics();
+
+            // Sürükle-bırak (Drag & Drop) ile .txt açma
+            rtbTtsInput.DragEnter += (s, e) =>
+            {
+                if (e.Data != null && e.Data.GetDataPresent(DataFormats.FileDrop))
+                {
+                    e.Effect = DragDropEffects.Copy;
+                }
+            };
+            rtbTtsInput.DragDrop += (s, e) =>
+            {
+                if (e.Data != null && e.Data.GetDataPresent(DataFormats.FileDrop))
+                {
+                    string[]? files = e.Data.GetData(DataFormats.FileDrop) as string[];
+                    if (files != null && files.Length > 0 && File.Exists(files[0]))
+                    {
+                        LoadTextFromFile(files[0]);
+                    }
+                }
+            };
+
+            // Font boyutu ayarı (A+ / A-)
+            btnZoomIn.Click += (s, e) =>
+            {
+                if (_currentFontSize < 24.0f)
+                {
+                    _currentFontSize += 2.0f;
+                    rtbTtsInput.Font = new Font(rtbTtsInput.Font.FontFamily, _currentFontSize);
+                    rtbSttTranscript.Font = new Font(rtbSttTranscript.Font.FontFamily, _currentFontSize);
+                }
+            };
+
+            btnZoomOut.Click += (s, e) =>
+            {
+                if (_currentFontSize > 9.0f)
+                {
+                    _currentFontSize -= 2.0f;
+                    rtbTtsInput.Font = new Font(rtbTtsInput.Font.FontFamily, _currentFontSize);
+                    rtbSttTranscript.Font = new Font(rtbSttTranscript.Font.FontFamily, _currentFontSize);
+                }
+            };
+
             // Ses profili değişimi
             cmbVoices.SelectedIndexChanged += (s, e) =>
             {
                 if (cmbVoices.SelectedItem is VoiceModel selected)
                 {
-                    _ttsService.SelectVoice(selected.Name);
-                    lblFooterStatus.Text = $"Aktif Ses Profili: {selected.DisplayName}";
+                    _ttsService.SelectVoice(selected);
+                    lblFooterStatus.Text = $"Aktif Ses: {selected.DisplayName}";
+                    UpdateTextStatistics();
                 }
             };
 
@@ -167,17 +249,18 @@ namespace SpeechApp.Forms
             {
                 _ttsService.Rate = tbRate.Value;
                 lblRateValue.Text = tbRate.Value > 0 ? $"+{tbRate.Value}" : tbRate.Value.ToString();
+                UpdateTextStatistics();
             };
 
-            // Ses seviyesi ayarı
+            // Ses düzeyi ayarı
             tbVolume.ValueChanged += (s, e) =>
             {
                 _ttsService.Volume = tbVolume.Value;
                 lblVolumeValue.Text = $"%{tbVolume.Value}";
             };
 
-            // Buton eylemleri
-            btnTtsSpeak.Click += (s, e) =>
+            // Oynat
+            btnTtsSpeak.Click += async (s, e) =>
             {
                 string text = rtbTtsInput.Text.Trim();
                 if (string.IsNullOrWhiteSpace(text))
@@ -188,7 +271,7 @@ namespace SpeechApp.Forms
                 }
 
                 ClearTextHighlights();
-                _ttsService.SpeakAsync(text);
+                await _ttsService.SpeakAsync(text);
             };
 
             btnTtsPause.Click += (s, e) => _ttsService.Pause();
@@ -208,10 +291,27 @@ namespace SpeechApp.Forms
                         _ttsService.Stop();
                         rtbTtsInput.Clear();
                         ClearTextHighlights();
+                        UpdateTextStatistics();
                     }
                 }
             };
 
+            // Dosyadan Yükle (.txt)
+            btnTtsOpenFile.Click += (s, e) =>
+            {
+                using OpenFileDialog ofd = new OpenFileDialog
+                {
+                    Filter = "Metin Belgeleri (*.txt)|*.txt|Tüm Dosyalar (*.*)|*.*",
+                    Title = "Seslendirilecek Metin Dosyasını Seçin"
+                };
+
+                if (ofd.ShowDialog() == DialogResult.OK)
+                {
+                    LoadTextFromFile(ofd.FileName);
+                }
+            };
+
+            // Metni Kaydet (.txt)
             btnTtsSaveText.Click += (s, e) =>
             {
                 string text = rtbTtsInput.Text.Trim();
@@ -241,7 +341,8 @@ namespace SpeechApp.Forms
                 }
             };
 
-            btnTtsSaveWav.Click += (s, e) =>
+            // Sesi Kaydet (.wav)
+            btnTtsSaveWav.Click += async (s, e) =>
             {
                 string text = rtbTtsInput.Text.Trim();
                 if (string.IsNullOrWhiteSpace(text))
@@ -260,8 +361,8 @@ namespace SpeechApp.Forms
                 if (sfd.ShowDialog() == DialogResult.OK)
                 {
                     btnTtsSaveWav.Enabled = false;
-                    lblFooterStatus.Text = "WAV ses dosyası oluşturuluyor...";
-                    bool ok = _ttsService.ExportToWav(text, sfd.FileName);
+                    lblFooterStatus.Text = "WAV ses dosyası üretiliyor...";
+                    bool ok = await _ttsService.ExportToWavAsync(text, sfd.FileName);
                     btnTtsSaveWav.Enabled = true;
 
                     if (ok)
@@ -275,6 +376,41 @@ namespace SpeechApp.Forms
                     }
                 }
             };
+        }
+
+        private void LoadTextFromFile(string filePath)
+        {
+            try
+            {
+                string content = File.ReadAllText(filePath, System.Text.Encoding.UTF8);
+                rtbTtsInput.Text = content;
+                UpdateTextStatistics();
+                lblFooterStatus.Text = $"Dosya yüklendi: {Path.GetFileName(filePath)}";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Dosya okunamadı: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void UpdateTextStatistics()
+        {
+            string text = rtbTtsInput.Text;
+            int charCount = text.Length;
+
+            // Kelime sayısı hesabı
+            MatchCollection wordMatches = Regex.Matches(text, @"[\p{L}\p{N}]+");
+            int wordCount = wordMatches.Count;
+
+            // Cümle sayısı hesabı
+            MatchCollection sentenceMatches = Regex.Matches(text, @"[.!?]+");
+            int sentenceCount = sentenceMatches.Count > 0 ? sentenceMatches.Count : (wordCount > 0 ? 1 : 0);
+
+            // Ortalama okuma hızı: normal hızda dakikada ~130 kelime
+            double speedFactor = tbRate.Value < 0 ? (1.0 + tbRate.Value * 0.05) : (1.0 + tbRate.Value * 0.1);
+            int estSeconds = wordCount > 0 ? Math.Max(1, (int)(wordCount / (130.0 / 60.0 * speedFactor))) : 0;
+
+            lblTtsStats.Text = $"📊 Karakter: {charCount:N0} | Kelime: {wordCount:N0} | Cümle: {sentenceCount:N0} | ⏱️ Tahmini Okuma Süresi: ~{estSeconds} sn";
         }
 
         private void Tts_OnStatusChanged(SynthesisStatus status)
@@ -301,8 +437,6 @@ namespace SpeechApp.Forms
                     btnTtsStop.Enabled = false;
                     btnTtsClear.Enabled = true;
                     cmbVoices.Enabled = true;
-                    tbRate.Enabled = true;
-                    tbVolume.Enabled = true;
                     lblFooterStatus.Text = "Metinden Sese (TTS) Motoru: Hazır";
                     break;
 
@@ -326,7 +460,7 @@ namespace SpeechApp.Forms
                     btnTtsResume.Enabled = true;
                     btnTtsStop.Enabled = true;
                     btnTtsClear.Enabled = false;
-                    lblFooterStatus.Text = "Seslendirme duraklatıldı. Devam etmek için 'Devam Et'e basınız.";
+                    lblFooterStatus.Text = "Seslendirme duraklatıldı. Devam etmek için 'Devam'a basınız.";
                     break;
             }
         }
@@ -346,14 +480,12 @@ namespace SpeechApp.Forms
         {
             try
             {
-                // Önceki vurguyu temizle
                 if (_lastHighlightPos >= 0 && _lastHighlightPos + _lastHighlightLen <= rtbTtsInput.TextLength)
                 {
                     rtbTtsInput.Select(_lastHighlightPos, _lastHighlightLen);
                     rtbTtsInput.SelectionBackColor = Color.White;
                 }
 
-                // Yeni kelimeyi sarı renkle vurgula
                 if (pos >= 0 && pos + count <= rtbTtsInput.TextLength)
                 {
                     rtbTtsInput.Select(pos, count);
@@ -418,22 +550,45 @@ namespace SpeechApp.Forms
             _sttService.OnAudioLevelUpdated += Stt_OnAudioLevelUpdated;
             _sttService.OnError += Stt_OnError;
 
-            btnSttStart.Click += (s, e) =>
-            {
-                _sttService.StartListening();
-            };
-
-            btnSttStop.Click += (s, e) =>
-            {
-                _sttService.StopListening();
-            };
+            btnSttStart.Click += (s, e) => _sttService.StartListening();
+            btnSttStop.Click += (s, e) => _sttService.StopListening();
 
             btnSimulateSpeech.Click += async (s, e) =>
             {
                 string sample = cmbSamplePhrases.SelectedItem?.ToString() ?? "Merhaba dünya";
                 btnSimulateSpeech.Enabled = false;
-                await _sttService.SimulateSpeechRecognitionAsync(sample, 0.95f);
+                await _sttService.SimulateSpeechRecognitionAsync(sample, 0.96f);
                 btnSimulateSpeech.Enabled = true;
+            };
+
+            // 🗣️ ⇄ 🎙️ Çift Yönlü Entegrasyon: Konuşulanı TTS'e Aktar ve Seslendir
+            btnSttTransferToTts.Click += async (s, e) =>
+            {
+                string textToTransfer = "";
+
+                if (dgvSpeechLogs.SelectedRows.Count > 0)
+                {
+                    textToTransfer = dgvSpeechLogs.SelectedRows[0].Cells["colText"].Value?.ToString() ?? "";
+                }
+
+                if (string.IsNullOrWhiteSpace(textToTransfer))
+                {
+                    textToTransfer = rtbSttTranscript.Text.Trim();
+                }
+
+                if (string.IsNullOrWhiteSpace(textToTransfer))
+                {
+                    MessageBox.Show("Aktarılacak herhangi bir konuşma metni bulunamadı. Lütfen önce bir konuşma kaydediniz veya listeden bir satır seçiniz.", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                // TTS sekmesine geç ve metni aktar
+                rtbTtsInput.Text = textToTransfer;
+                tabMain.SelectedIndex = 0;
+                UpdateTextStatistics();
+
+                lblFooterStatus.Text = "Konuşulan metin TTS sekmesine aktarıldı, seslendiriliyor...";
+                await _ttsService.SpeakAsync(textToTransfer);
             };
 
             btnSttSaveTranscript.Click += (s, e) =>
@@ -508,7 +663,7 @@ namespace SpeechApp.Forms
                     lblSttStatus.BackColor = Color.FromArgb(22, 163, 74);
                     btnSttStart.Enabled = false;
                     btnSttStop.Enabled = true;
-                    lblFooterStatus.Text = "Mikrofon aktif! Lütfen konuşunuz...";
+                    lblFooterStatus.Text = "Mikrofon aktif! Konuşabilirsiniz (Örnek komutlar: 'Temizle', 'Kaydet', 'Oku')...";
                     break;
 
                 case RecognitionStatus.Processing:
@@ -553,6 +708,35 @@ namespace SpeechApp.Forms
             grpSpeechLogs.Text = $"🕒 Zaman Damgalı Algılanan Konuşma Geçmişi ({_sttService.Logs.Count})";
 
             lblFooterStatus.Text = $"Algılandı ({entry.ConfidencePercentage}): \"{entry.Text}\"";
+
+            // ⚡ SESLİ KOMUT KONTROLÜ
+            CheckVoiceCommands(entry.Text);
+        }
+
+        private void CheckVoiceCommands(string text)
+        {
+            string lower = text.ToLower();
+
+            if (lower.Contains("temizle") || lower.Contains("clear"))
+            {
+                lblVoiceCommandAlert.Text = "⚡ Sesli Komut: Temizle!";
+                btnSttClearLogs.PerformClick();
+            }
+            else if (lower.Contains("kaydet") || lower.Contains("save"))
+            {
+                lblVoiceCommandAlert.Text = "⚡ Sesli Komut: Kaydet!";
+                btnSttSaveTranscript.PerformClick();
+            }
+            else if (lower.Contains("durdur") || lower.Contains("stop"))
+            {
+                lblVoiceCommandAlert.Text = "⚡ Sesli Komut: Durdur!";
+                btnSttStop.PerformClick();
+            }
+            else if (lower.Contains("oku") || lower.Contains("seslendir") || lower.Contains("speak"))
+            {
+                lblVoiceCommandAlert.Text = "⚡ Sesli Komut: Oku / Seslendir!";
+                btnSttTransferToTts.PerformClick();
+            }
         }
 
         private void Stt_OnSpeechHypothesized(string partialText)
